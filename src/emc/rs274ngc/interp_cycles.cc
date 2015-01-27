@@ -666,6 +666,16 @@ int Interp::convert_cycle(int motion,    //!< a g-code between G_81 and G_89, a 
 	plane_name(settings->plane));
   }
 
+    //KLUDGE ugly way to save / restore motion mode flag so that state tag displays correctly
+    int save_mode = settings->motion_mode;
+    settings->motion_mode = motion;
+
+    // Create a state tag and dump it to canon
+    write_canon_state(block, settings);
+
+    settings->motion_mode = save_mode;
+    // end KLUDGE
+
   if (plane == CANON_PLANE_XY) {
     CHP(convert_cycle_xy(motion, block, settings));
   } else if (plane == CANON_PLANE_YZ) {

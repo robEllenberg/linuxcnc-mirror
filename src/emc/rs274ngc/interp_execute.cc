@@ -302,6 +302,9 @@ int Interp::execute_block(block_pointer block,   //!< pointer to a block of RS27
   if (settings->toolchange_flag)
       return (INTERP_EXECUTE_FINISH);
 
+  // All changes to settings are complete
+  // Create a state tag and dump it to canon
+  write_canon_state(block, settings);
   return INTERP_OK;
 }
 

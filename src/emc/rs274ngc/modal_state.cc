@@ -14,11 +14,6 @@
 #include "modal_state.hh"
 #include <string.h>
 
-ModalState::ModalState(): g_codes(ACTIVE_G_CODES,0),
-    m_codes(ACTIVE_M_CODES,0),
-    settings(ACTIVE_SETTINGS,0.0)
-{}
-
 StateTag::StateTag(): flags(0)
 {
     memset(fields,-1,sizeof(fields));
@@ -33,5 +28,28 @@ StateTag::StateTag(struct state_tag_t const & basetag): flags(basetag.packed_fla
     packed_flags = 0;
     feed = basetag.feed;
     speed = basetag.speed;
+}
+
+
+/**
+ * Return true if the tag is a valid state, and false if not
+ */
+int StateTag::is_valid(void) const
+{
+
+    if (fields[GM_FIELD_LINE_NUMBER] <= 1) {
+        return false;
+    }
+
+    //TODO magic numbers
+    if (fields[GM_FIELD_ORIGIN] < 540) {
+        return false;
+    }
+
+    if (fields[GM_FIELD_PLANE] < 170 ) {
+        return false;
+    }
+
+    return true;
 }
 
