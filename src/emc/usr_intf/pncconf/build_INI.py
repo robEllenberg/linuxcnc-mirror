@@ -130,7 +130,7 @@ class INI:
         print >>file, "[HALUI]"          
         if self.d.halui == True:
             for i in range(0,15):
-                cmd =self["halui_cmd" + str(i)]
+                cmd =self.d["halui_cmd" + str(i)]
                 if cmd =="": break
                 print >>file,"MDI_COMMAND = %s"% cmd           
 
@@ -267,9 +267,9 @@ class INI:
                     scale = 1 # we scale the multiple ranges in the HAL file
                 else:
                     scale = self.d.soutputscale # we scale to the max RPM
-                print >>file, "OUTPUT_SCALE = %s"% ( max_voltage_factor * scale * temp)
-                print >>file, "OUTPUT_MIN_LIMIT = %s"% ( min_voltage_factor * scale)
-                print >>file, "OUTPUT_MAX_LIMIT = %s"% (1 * scale)
+                print >>file, "OUTPUT_SCALE = %s"% ( int(max_voltage_factor * scale * temp) )
+                print >>file, "OUTPUT_MIN_LIMIT = %s"% ( int(min_voltage_factor * scale) )
+                print >>file, "OUTPUT_MAX_LIMIT = %s"% ( int(scale) )
                 print >>file
             else:
                 print >>file, "OUTPUT_SCALE = %s" % (get("outputscale") * temp)

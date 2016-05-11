@@ -762,7 +762,7 @@ class HAL:
                     print >>f1, _("# **** Setup of spindle speed display using gladevcp ****")
                     print >>f1
                     if spindle_enc:
-                        print >>f1, ("net spindle-fb-filtered-abs-rpm       =>   gladevcp.spindle-speed")
+                        print >>f1, ("net spindle-fb-rpm-abs-filtered       =>   gladevcp.spindle-speed")
                     else:
                         print >>f1, ("net spindle-vel-cmd-rpm-abs    =>    gladevcp.spindle-speed")
                 if self.d.spindleatspeed:
@@ -834,7 +834,7 @@ class HAL:
             print >>f1, _("# **** Setup of spindle speed display using pyvcp -START ****")
             print >>f1
             if spindle_enc:
-                print >>f1, ("net spindle-fb-filtered-abs-rpm       =>   pyvcp.spindle-speed")
+                print >>f1, ("net spindle-fb-rpm-abs-filtered       =>   pyvcp.spindle-speed")
             else:
                 print >>f1, ("net spindle-vel-cmd-rpm-abs    =>    pyvcp.spindle-speed")
             print >>f1, ("net spindle-at-speed        =>    pyvcp.spindle-at-speed-led")
@@ -1148,9 +1148,10 @@ class HAL:
                     print >>file, "net ratio_select.out   pid.%s.maxoutput " % (let)
                 else:
                     print >>file, "setp   pid.%s.maxoutput [%s_%d]MAX_OUTPUT" % (let, title, axnum)
-                # steppers
                 print >>file, "setp   pid.%s.error-previous-target true" % let
-                print >>file, "setp   pid.%s.maxerror .0005" % let
+                # steppers
+                if steppinname:
+                    print >>file, "setp   pid.%s.maxerror .0005" % let
                 print >>file
                 if let == 's':
                     name = "spindle"
@@ -1437,6 +1438,8 @@ class HAL:
                     print >>file, "sets spindle-at-speed true"
                     print >>file
             if encoderpinname or resolverpinname:
+                if (self.d.pyvcp and self.d.pyvcpconnect == 1 and self.d.pyvcphaltype == 1) \
+                  or self.d.gladevcp and self.d.spindlespeedbar:
                     print >>file, _("#  Use ACTUAL spindle velocity from spindle encoder")
                     print >>file, _("#  spindle-velocity bounces around so we filter it with lowpass")
                     print >>file, _("#  spindle-velocity is signed so we use absolute component to remove sign") 

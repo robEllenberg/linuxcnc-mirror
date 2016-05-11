@@ -49,6 +49,7 @@ DOC_SRCS_EN := \
 	drivers/gm.txt \
 	drivers/gs2.txt \
 	drivers/hostmot2.txt \
+	drivers/mb2hal.txt \
 	drivers/motenc.txt \
 	drivers/opto22.txt \
 	drivers/pico-ppmc.txt \
@@ -260,7 +261,8 @@ HTML_TARGETS := \
 	$(DOC_DIR)/html/index_es.html \
 	$(DOC_DIR)/html/index_fr.html \
 
-A2X = a2x --xsltproc-opts "--stringparam toc.section.depth 3 \
+A2X = a2x --xsltproc-opts "--nonet \
+			   --stringparam toc.section.depth 3 \
 			   --stringparam toc.max.depth 2 \
 			   --stringparam generate.section.toc.level 2 \
 			   --stringparam generate.toc 'book toc,title chapter toc'" \
@@ -457,7 +459,7 @@ $(DOC_TARGETS_HTML): $(DOC_DIR)/html/%.html: $(DOC_SRCDIR)/%.html
 	@cp $< $@
 
 .html-images-stamp: $(DOC_TARGETS_HTML)
-	for HTML_FILE in $^; do \
+	set -e; for HTML_FILE in $^; do \
 		HTML_DIR=$$(basename $$(dirname $$HTML_FILE)); \
 		for IMAGE_FILE in $$(xsltproc --novalid --nonet $(DOC_SRCDIR)/html-images.xslt $$HTML_FILE); do \
 			IMAGE_DIR=$$(dirname $$IMAGE_FILE); \
