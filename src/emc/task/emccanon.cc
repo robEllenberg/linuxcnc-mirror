@@ -113,18 +113,41 @@ static int rotary_unlock_for_traverse = -1;
 
 #define AXIS_PERIOD(axisnum) (IS_PERIODIC(axisnum) ? 360 : 0)
 
-//KLUDGE kinematic data struct (instead of returning a single float value)
-//FIXME This should really be refactored into a more general structure, but this
-//means tearing up the getStraightXXX functions, which probably means
-//converting to canon_position operators
+
+/**
+ *  Holds results of velocity calculations for a straight segment.
+ *  @todo This should really be refactored into a more general structure, but
+ *  this means tearing up the getStraightXXX functions, which probably means
+ *  converting to canon_position operators.
+ *  @todo replace redundant data with member functions (to simplify GetStraightXXX functions)
+ */
 struct VelData {
+    VelData(double default_feed) : tmax(0),
+        vel(std::max(default_feed, 0.0)),
+        dtot(0),
+        d_xyz(0),
+        d_uvw(0),
+        vel_xyz(0),
+        vel_uvw(0) {}
+
+    /** Total time required to complete move for all axes */
     double tmax;
+
+    /** 6D cartesian velocity OR angular velocity, depending on move type */
     double vel;
-    // Stores the equivalent velocity when only using XYZ (used to cap feeds at requested XYZ feed).
-    double vel_xyz;
+
+    /** Total straight-line distance traveled along the line (6D). */
     double dtot;
-    //Used for ARC_FEED to figure out the net velocity with an XYX arc and a UVW line together
+
+    /** KLUDGE need this to calculate UVW motion distance for circular arcs in XYZ. */
+    double d_xyz;
     double d_uvw;
+
+    /** Just the XYZ component of velocity */
+    double vel_xyz;
+
+    /** Just the UVW component of velocity */
+    double vel_uvw;
 };
 
 struct AccelData{
@@ -722,14 +745,8 @@ static VelData getStraightVelocity(double x, double y, double z,
 {
     double dx, dy, dz, da, db, dc, du, dv, dw;
     double tx, ty, tz, ta, tb, tc, tu, tv, tw;
-    VelData out={0};
-
-/* If we get a move to nowhere (!cartesian_move && !angular_move)
-   we might as well go there at the currentLinearFeedRate...
-*/
-    out.vel = currentLinearFeedRate;
-    out.tmax = 0;
-    out.dtot = 0;
+    // Start with safe default values
+    VelData out(currentLinearFeedRate);
 
     // Compute absolute travel distance for each axis:
     dx = fabs(x - canonEndPoint.x);
@@ -807,22 +824,18 @@ static VelData getStraightVelocity(double x, double y, double z,
             complete their motion coordinated with the motion of
             the linear axes.
             */
-        double d_xyz = sqrt(dx * dx + dy * dy + dz * dz);
-
-        // Add in UVW motion to arc length and velocity (if there is any)
-        if (du > 0 || dv >0 || dw > 0) {
-            out.d_uvw = sqrt(du * du + dv * dv + dw * dw);
-            out.dtot = sqrt(d_xyz * d_xyz + out.d_uvw * out.d_uvw);
-        } else {
-            out.dtot = d_xyz;
-        }
+        out.d_xyz = sqrt(dx * dx + dy * dy + dz * dz);
+        out.d_uvw = sqrt(du * du + dv * dv + dw * dw);
+        out.dtot = sqrt(out.d_xyz * out.d_xyz + out.d_uvw * out.d_uvw);
 
         if (out.tmax <= 0.0) {
             out.vel = currentLinearFeedRate;
             out.vel_xyz = out.vel;
+            out.vel_uvw = out.vel;
         } else {
             out.vel = out.dtot / out.tmax;
-            out.vel_xyz = d_xyz / out.tmax;
+            out.vel_xyz = out.d_xyz / out.tmax;
+            out.vel_uvw = out.d_uvw / out.tmax;
         }
     }
     if(debug_velacc) 
@@ -870,9 +883,13 @@ static void flush_segments(void) {
 
     double vel = linedata.vel;
     if (cartesian_move) {
-        if (linedata.vel_xyz > currentLinearFeedRate) {
-            vel *= currentLinearFeedRate / linedata.vel_xyz ;
-        }
+        // Limit velocity of XYZ and UVW axis sets to the cartesian feed rate.
+        double clipped_xyz = std::min(linedata.vel_xyz, currentLinearFeedRate);
+        double clipped_uvw = std::min(linedata.vel_uvw, currentLinearFeedRate);
+
+        // However, the 6D velocity (XYZUVW all moving together) can be higher
+        vel = sqrt(pow(clipped_xyz, 2) + pow(clipped_uvw, 2));
+
         canon_debug("cartesian move, linear feed is %f\n", vel);
     } else if (angular_move) {
         if (vel > currentAngularFeedRate) {
