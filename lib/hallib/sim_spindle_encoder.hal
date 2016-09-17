@@ -15,7 +15,7 @@ setp limit_speed.maxv 5000.0 # rpm/second
 net spindle-index-enable motion.spindle-index-enable <=> sim_spindle.index-enable
 
 # Set resolution of spindle encoder in counts / revolution (Note: this value is 4 * LPR or PPR)
-setp sim_spindle_encoder.resolution 64.0
+setp sim_spindle_encoder.resolution 256.0
 
 # Simulated spindle encoder
 net spindle-pos-raw sim_spindle.position-fb => sim_spindle_encoder.in
