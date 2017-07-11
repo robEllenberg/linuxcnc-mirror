@@ -26,6 +26,7 @@
  * Find the maximum angle allowed between "tangent" segments.
  * @param v speed of motion in worst case (i.e. at max feed).
  * @param acc magnitude of acceleration allowed during "kink".
+ * @param cycle_time one planner timestep (sec)
  *
  * Since we are discretized by a timestep, the maximum allowable
  * "kink" in a trajectory is bounded by normal acceleration. A small
@@ -34,9 +35,9 @@
  */
 double findMaxTangentAngle(double v_plan, double acc_limit, double cycle_time)
 {
-    //Find acc hiccup we're allowed to get
-    //TODO somewhat redundant with findKinkAccel, should refactor
+    // Calculate how much of a ripple in acceleration we can tolerate 
     double acc_margin = BLEND_ACC_RATIO_NORMAL * BLEND_KINK_FACTOR * acc_limit;
+
     double dx = v_plan / cycle_time;
     if (dx > 0.0) {
         return (acc_margin / dx);
@@ -51,6 +52,10 @@ double findMaxTangentAngle(double v_plan, double acc_limit, double cycle_time)
 /**
  * Find the acceleration required to create a specific change in path
  * direction, assuming constant speed.
+ * @param kink_angle Angle between direction vectors of of two nearly-tangent segments
+ * @param v_plan The ideal velocity we'd like to reach across the intersection
+ * @param cycle_time one planner timestep (sec)
+ *
  * This determines how much of a "spike" in acceleration will occur due to a
  * slight mismatch between tangent directions at the start / end of a segment.
  */
@@ -64,6 +69,9 @@ double findKinkAccel(double kink_angle, double v_plan, double cycle_time)
         return 0;
     }
 }
+
+
+/** @section util Utility functions for general use */
 
 
 /**
@@ -81,11 +89,13 @@ double fsign(double f)
     }
 }
 
-/** negate a value (or not) based on a bool parameter */
+
+/** Negate a value (or not) based on a bool parameter */
 inline double negate(double f, int neg)
 {
     return (neg) ? -f : f;
 }
+
 
 /** Clip the input at the specified minimum (in place). */
 int clip_min(double * const x, double min) {
@@ -106,9 +116,8 @@ int clip_max(double * const x, double max) {
     return 0;
 }
 
-/**
- * Saturate a value x to be within +/- max.
- */
+
+/** Saturate a value x to be within +/- max. */
 double saturate(double x, double max) {
     if ( x > max ) {
         return max;
@@ -122,9 +131,7 @@ double saturate(double x, double max) {
 }
 
 
-/**
- * Apply bounds to a value x.
- */
+/** Apply bounds to a value x. */
 inline double bound(double x, double max, double min) {
     if ( x > max ) {
         return max;
@@ -150,6 +157,7 @@ int sat_inplace(double * const x, double max) {
     }
     return 0;
 }
+
 
 #if 0
 static int pmCirclePrint(PmCircle const * const circ) {
@@ -190,17 +198,7 @@ static inline int findSpiralApproximation(PmCircle const * const circ,
 {
     double dr = circ->spiral / circ->angle;
 
-    /*tp_debug_print("In findSpiralApproximation\n");*/
-    /*tp_debug_print(" dr = %f\n",dr);*/
-    /*tp_debug_print(" utan = %f %f %f\n",*/
-            /*u_tan->x,*/
-            /*u_tan->y,*/
-            /*u_tan->z);*/
     pmCartScalMult(u_tan, dr, center_out);
-    /*tp_debug_print(" circcenter = %f %f %f\n",*/
-            /*circ->center.x,*/
-            /*circ->center.y,*/
-            /*circ->center.z);*/
     pmCartCartAddEq(center_out, &circ->center);
 
     PmCartesian r_adjust;
@@ -224,7 +222,7 @@ static inline int findSpiralApproximation(PmCircle const * const circ,
  * @param P intersection point
  * @param arc_center calculated center of blend arc
  * @param center actual center of circle (not spiral approximated center)
- * @return trim angle
+ * @return size of circular segment to remove (in rad)
  */
 static inline double findTrimAngle(PmCartesian const * const P,
         PmCartesian const * const arc_center,
@@ -249,8 +247,17 @@ static inline double findTrimAngle(PmCartesian const * const P,
 
 /**
  * Verify that a blend arc is tangent to a circular arc.
+ *
+ * This function works by comparing the tangent vectors of blend arc and
+ * circular arc segment. If the angle between them is less then the angle
+ * tolerance, then they are tangent enough not to cause (significant)
+ * acceleration spikes.
  */
-int checkTangentAngle(PmCircle const * const circ, SphericalArc const * const arc, BlendGeom3 const * const geom, BlendParameters const * const param, double cycle_time, int at_end)
+int checkTangentAngle(PmCircle const * const circ,
+        SphericalArc const * const arc,
+        BlendParameters const * const param,
+        double cycle_time,
+        int at_end)
 {
     // Debug Information to diagnose tangent issues
     PmCartesian u_circ, u_arc;
@@ -301,7 +308,6 @@ int checkTangentAngle(PmCircle const * const circ, SphericalArc const * const ar
 }
 
 
-
 /**
  * Check if two cartesian vectors are parallel.
  * The input tolerance specifies what the maximum angle between the
@@ -330,67 +336,26 @@ int pmCartCartParallel(PmCartesian const * const v1,
 
 
 /**
- * Check if a Circle and line are coplanar.
- *
- * @param circ PmCircle input
- * @param line PmCartLine input
- * @param tol deviation tolerance (magnitude of error component)
- */
-int pmCircLineCoplanar(PmCircle const * const circ,
-        PmCartLine const * const line, double tol)
-{
-    double dot;
-    int res = pmCartCartDot(&circ->normal, &line->uVec, &dot);
-    tp_debug_print("normal = %.12g %.12g %.12g, uVec = %.12g %.12g %.12g, dot = %.12g\n",
-            circ->normal.x,
-            circ->normal.y,
-            circ->normal.z,
-            line->uVec.x,
-            line->uVec.y,
-            line->uVec.z,
-            dot);
-    if (fabs(dot) < tol && !res) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-
-int blendCoplanarCheck(PmCartesian const * const normal,
-        PmCartesian const * const u1_tan,
-        PmCartesian const * const u2_tan,
-        double tol)
-{
-    if (!normal || !u1_tan  || !u2_tan) {
-        return TP_ERR_MISSING_INPUT;
-    }
-
-    double dot1, dot2;
-    int res1 = pmCartCartDot(normal, u1_tan, &dot1);
-    int res2 = pmCartCartDot(normal, u2_tan, &dot2);
-
-    if (fabs(dot1) < tol && fabs(dot2) < tol && !res1 && !res2) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-
-/**
  * Somewhat redundant function to calculate the segment intersection angle.
+ * @param u1 unit vector tangent to first segment at intersection point
+ * @param u2 unit vector tangent to second segment at intersection point
+ * @param[out] theta calculated intersection angle
+ *
  * The intersection angle is half of the supplement of the "divergence" angle
  * between unit vectors. If two unit vectors are pointing in the same
  * direction, then the intersection angle is PI/2. This is based on the
  * simple_tp formulation for tolerances.
+ *
+ * Note: This function does not check for valid inputs.
  */
-int findIntersectionAngle(PmCartesian const * const u1,
+int findIntersectionAngle3(PmCartesian const * const u1,
         PmCartesian const * const u2, double * const theta)
 {
     double dot;
     pmCartCartDot(u1, u2, &dot);
 
+    // Small deviations are ok, but but deviations indicate a problem
+    // elsewhere.
     if (dot > 1.0 || dot < -1.0) {
         tp_debug_print("dot product %.16g outside domain of acos! u1 = %.16g %.16g %.16g, u2 = %.16g %.16g %.16g\n",
                 dot,
@@ -408,13 +373,6 @@ int findIntersectionAngle(PmCartesian const * const u1,
 }
 
 
-/** Calculate the minimum of the three values in a PmCartesian. */
-double pmCartMin(PmCartesian const * const in)
-{
-    return fmin(fmin(in->x,in->y),in->z);
-}
-
-
 /**
  * Calculate the diameter of a circle incscribed on a central cross section of a 3D
  * rectangular prism.
@@ -423,6 +381,7 @@ double pmCartMin(PmCartesian const * const in)
  * @param extents distance from center to one corner of the prism.
  * @param diameter diameter of inscribed circle on cross section.
  *
+ * Note: this function may be replaced soon
  */
 int calculateInscribedDiameter(PmCartesian const * const normal,
         PmCartesian const * const bounds, double * const diameter)
@@ -498,10 +457,16 @@ int calculateInscribedDiameter(PmCartesian const * const normal,
 }
 
 
-
-int findAccelScale(PmCartesian const * const acc,
-        PmCartesian const * const bounds,
-        PmCartesian * const scale)
+/**
+ * Given an acceleration vector, find a scale factor that will place it within
+ * machine acceleration limits.
+ * @param acc acceleration vector to be tested
+ * @param bounds vector of machine acceleration limits
+ * @param[out] scale best-case scale factor
+ */
+int findAccelScale(Vector6 const * const acc,
+        Vector6 const * const bounds,
+        double * scale)
 {
     if (!acc || !bounds ) {
         return TP_ERR_MISSING_INPUT;
@@ -511,31 +476,28 @@ int findAccelScale(PmCartesian const * const acc,
         return TP_ERR_MISSING_OUTPUT;
     }
 
-    // Find the scale of acceleration vs. machine accel bounds
-    if (bounds->x != 0) {
-    scale->x = fabs(acc->x / bounds->x);
-    } else {
-        scale->x = 0;
-    }
-    if (bounds->y != 0) {
-    scale->y = fabs(acc->y / bounds->y);
-    } else {
-        scale->y = 0;
+    int i;
+    double m = 0;
+    for (i = 0; i < 6; ++i) {
+        // Crude numerical cutoff to prevent scales being too low and causing division errors
+        double b = bounds->ax[i];
+        double a = fabs(acc->ax[i]);
+        if (b > 0.0) {
+            //Have to square b here since the scale is also squared
+            m = fmax(m, a / b);
+        }
     }
 
-    if (bounds->z != 0) {
-    scale->z = fabs(acc->z / bounds->z);
-    } else {
-        scale->z = 0;
-    }
+    *scale = m;
 
     return TP_ERR_OK;
 }
 
 
-
-
-/** Find real roots of a quadratic equation in standard form. */
+/**
+ * Find real roots of a quadratic equation in standard form.
+ * 
+ */
 int quadraticFormula(double A, double B, double C, double * const root0,
         double * const root1)
 {
@@ -576,8 +538,12 @@ int blendGeom3Init(BlendGeom3 * const geom,
     geom->v_max2 = tc->maxvel;
 
     // Get tangent unit vectors to each arc at the intersection point
-    int res_u1 = tcGetEndTangentUnitVector(prev_tc, &geom->u_tan1);
-    int res_u2 = tcGetStartTangentUnitVector(tc, &geom->u_tan2);
+    // Ugly way recycles these functions and throws out UVW components
+    Vector6 u1, u2;
+    int res_u1 = tcGetEndTangentUnitVector(prev_tc, &u1);
+    int res_u2 = tcGetStartTangentUnitVector(tc, &u2);
+    VecToCart(&u1, &geom->u_tan1, NULL);
+    VecToCart(&u2, &geom->u_tan2, NULL);
 
     // Initialize u1 and u2 by assuming they match the tangent direction
     geom->u1 = geom->u_tan1;
@@ -591,7 +557,7 @@ int blendGeom3Init(BlendGeom3 * const geom,
             geom->P.z);
 
     // Find angle between tangent vectors
-    int res_angle = findIntersectionAngle(&geom->u_tan1,
+    int res_angle = findIntersectionAngle3(&geom->u_tan1,
             &geom->u_tan2,
             &geom->theta_tan);
 
@@ -1187,8 +1153,9 @@ int blendComputeParameters(BlendParameters * const param)
 
 /** Check if the previous line segment will be consumed based on the blend arc parameters. */
 int blendCheckConsume(BlendParameters * const param,
-        BlendPoints3 const * const points,
-        TC_STRUCT const * const prev_tc, int gap_cycles)
+        double trim,
+        TC_STRUCT const * const prev_tc,
+        int gap_cycles)
 {
     //Initialize values
     param->consume = 0;
@@ -1202,9 +1169,10 @@ int blendCheckConsume(BlendParameters * const param,
     }
 
     //Check for segment length limits
-    double L_prev = prev_tc->target - points->trim1;
+    double L_prev = prev_tc->target - trim;
     double prev_seg_time = L_prev / param->v_plan;
 
+    // KLUDGE force this to always be false for now for debugging
     bool can_consume = tcCanConsume(prev_tc);
     param->consume = (prev_seg_time < gap_cycles * prev_tc->cycle_time && can_consume);
     if (param->consume) {
@@ -1567,20 +1535,43 @@ int blendArcArcPostProcess(BlendPoints3 * const points, BlendPoints3 const * con
 
 /**
  * Setup the spherical arc struct based on the blend arc data.
+ * @param[out] arc resulting blend arc
+ * @param points start / end / center points computed for the blend
+ * @param geom geometry details computed for the blend
+ * @param param other generalized parameters for the blend
+ * @param uvw fixed UVW position during blend motion.
+ *
+ * This function translates from blend calculations into a form usable for
+ * building a spherical arc. Note that in this function, UVW position is held
+ * constant during the blend.
  */
-int arcFromBlendPoints3(SphericalArc * const arc, BlendPoints3 const * const points,
-        BlendGeom3 const * const geom, BlendParameters const * const param)
+int arcFromBlendPoints3(SphericalArc * const arc,
+        BlendPoints3 const * const points,
+        BlendGeom3 const * const geom,
+        BlendParameters const * const param,
+        PmCartesian const * const uvw)
 {
     // If we consume the previous line, the remaining line length gets added here
-    arc->uTan = geom->u_tan1;
-    arc->line_length = param->line_length;
-    arc->binormal = geom->binormal;
 
-    // Create the arc from the processed points
-    return arcInitFromPoints(arc, &points->arc_start,
-            &points->arc_end, &points->arc_center);
+    // Augment 3D tangent vector with zeros and save as 6D tangent vector
+    // Necessary for line arc case
+    PmCartesian zero={0,0,0};
+    CartToVec(&geom->u_tan1, &zero, &arc->uTan);
+
+    arc->line_length = param->line_length;
+
+    // Augment start, end, and center vectors with fixed UVW position
+    Vector6 start, end, center;
+    CartToVec(&points->arc_start, &zero, &start);
+    CartToVec(&points->arc_end, &zero, &end);
+    CartToVec(&points->arc_center, uvw, &center);
+
+    // Finally, use the augmented vectors to create the 6D arc
+    return arcInitFromPoints(arc, &start, &end, &center);
 }
 
+
+/** Debug function for printing geometry data */
 int blendGeom3Print(BlendGeom3 const * const geom)
 {
     tp_debug_print("u1 = %f %f %f\n",
@@ -1595,6 +1586,8 @@ int blendGeom3Print(BlendGeom3 const * const geom)
     return 0;
 }
 
+
+/** Debug function to list resulting points from a blend */
 int blendPoints3Print(BlendPoints3 const * const points)
 {
     tp_debug_print("arc_start = %f %f %f\n",
@@ -1648,13 +1641,19 @@ double pmCircleActualMaxVel(PmCircle * const circle,
 /** @section spiralfuncs Functions to approximate spiral arc length */
 
 /**
- * Intermediate function to find the angle for a parameter from 0..1 along the
- * spiral arc.
+ * Compute the angle along a circule segment given the normalized distance progress.
+ * @param circle circular segment
+ * @param fit corresponding fit to circular segment
+ * @param t normalized distance along segment (0 <= t <= 1)
+ * @return actual angle along the circular segment
+ *
+ * This step is necessary since arc length is in general a function of angle.
+ * Essentially, this function is the inverse of the quadratic fit of angle to
+ * arc length.
  */
-static int pmCircleAngleFromParam(PmCircle const * const circle,
+double pmCircleAngleFromParam(PmCircle const * const circle,
         SpiralArcLengthFit const * const fit,
-        double t,
-        double * const angle)
+        double t)
 {
     if (fit->spiral_in) {
         t = 1.0 - t;
@@ -1697,8 +1696,7 @@ static int pmCircleAngleFromParam(PmCircle const * const circle,
         angle_out = circle->angle - angle_out;
     }
 
-    *angle = angle_out;
-    return TP_ERR_OK;
+    return angle_out;
 }
 
 
@@ -1728,6 +1726,9 @@ static void printSpiralArcLengthFit(SpiralArcLengthFit const * const fit)
  * Also, this fit predicts a total arc length >= the true arc length, which
  * means the true speed along the curve will be the same or slower than the
  * nominal speed.
+ *
+ * @param circle circle w/ spiral component
+ * @param[out] fit computed fit structure
  */
 int findSpiralArcLengthFit(PmCircle const * const circle,
         SpiralArcLengthFit * const fit)
@@ -1751,7 +1752,6 @@ int findSpiralArcLengthFit(PmCircle const * const circle,
     tp_debug_print("radius = %.12f, angle = %.12f\n", min_radius, circle->angle);
     tp_debug_print("spiral_coef = %.12f\n", spiral_coef);
 
-
     //Compute the slope of the arc length vs. angle curve at the start and end of the segment
     double slope_start = pmSqrt(pmSq(min_radius) + pmSq(spiral_coef));
     double slope_end = pmSqrt(pmSq(min_radius + spiral_coef * circle->angle) + pmSq(spiral_coef));
@@ -1763,16 +1763,9 @@ int findSpiralArcLengthFit(PmCircle const * const circle,
     printSpiralArcLengthFit(fit);
 
     // Check against start and end angle
-    double angle_end_chk = 0.0;
-    int res_angle = pmCircleAngleFromParam(circle, fit, 1.0, &angle_end_chk);
-    if (res_angle != TP_ERR_OK) {
-        //TODO better error message
-        rtapi_print_msg(RTAPI_MSG_ERR,
-                "Spiral fit failed\n");
-        return TP_ERR_FAIL;
-    }
+    double angle_end_chk = pmCircleAngleFromParam(circle, fit, 1.0);
 
-    // Check fit against angle
+    angle_end_chk = pmCircleAngleFromParam(circle, fit, 1.0);
     double fit_err = angle_end_chk - circle->angle;
     if (fabs(fit_err) > TP_ANGLE_EPSILON) {
         rtapi_print_msg(RTAPI_MSG_ERR,
@@ -1787,27 +1780,11 @@ int findSpiralArcLengthFit(PmCircle const * const circle,
 
 
 /**
- * Compute the angle around a circular segment from the total progress along
- * the curve.
- */
-int pmCircleAngleFromProgress(PmCircle const * const circle,
-        SpiralArcLengthFit const * const fit,
-        double progress,
-        double * const angle)
-{
-    double h2;
-    pmCartMagSq(&circle->rHelix, &h2);
-    double s_end = pmSqrt(pmSq(fit->total_planar_length) + h2);
-    // Parameterize by total progress along helix
-    double t = progress / s_end;
-    return pmCircleAngleFromParam(circle, fit, t, angle);
-}
-
-
-/**
  * Find the effective minimum radius for acceleration calculations.
  * The radius of curvature of a spiral is larger than the circle of the same
- * radius.
+ * nominal radius.
+ * @param circle circle geometry to check
+ * @return effective radius
  */
 double pmCircleEffectiveMinRadius(PmCircle const * const circle)
 {

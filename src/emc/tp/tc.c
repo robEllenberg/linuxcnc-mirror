@@ -195,17 +195,24 @@ int pmCircleTangentVector(PmCircle const * const circle,
 /**
  * Calulate the unit tangent vector at the start of a move for any segment.
  */
-int tcGetStartTangentUnitVector(TC_STRUCT const * const tc, PmCartesian * const out) {
+int tcGetStartTangentUnitVector(TC_STRUCT const * const tc, Vector6 * const out)
+{
+    PmCartesian zero={0,0,0};
+    PmCartesian temp={0,0,0};
 
     switch (tc->motion_type) {
         case TC_LINEAR:
-            *out=tc->coords.line.xyz.uVec;
-            break;
+            return tcGetEndTangentUnitVector(tc, out);
         case TC_RIGIDTAP:
-            *out=tc->coords.rigidtap.xyz.uVec;
+            // Augment with zero vector, no re-scaling necessary
+            CartToVec(&tc->coords.rigidtap.xyz.uVec, &zero, out);
             break;
         case TC_CIRCULAR:
-            pmCircleTangentVector(&tc->coords.circle.xyz, 0.0, out);
+            // KLUDGE ignore UVW direction. this is WRONG, but since we don't
+            // do any tangent blends with circles and UVW motion, we can get
+            // away with it for now.
+            pmCircleTangentVector(&tc->coords.circle.xyz, 0.0, &temp);
+            CartToVec(&temp, &zero, out);
             break;
         default:
             rtapi_print_msg(RTAPI_MSG_ERR, "Invalid motion type %d!\n",tc->motion_type);
@@ -217,18 +224,36 @@ int tcGetStartTangentUnitVector(TC_STRUCT const * const tc, PmCartesian * const 
 /**
  * Calulate the unit tangent vector at the end of a move for any segment.
  */
-int tcGetEndTangentUnitVector(TC_STRUCT const * const tc, PmCartesian * const out) {
+int tcGetEndTangentUnitVector(TC_STRUCT const * const tc, Vector6 * const out) {
+
+    PmCartesian zero={0,0,0};
+    PmCartesian temp={0,0,0};
 
     switch (tc->motion_type) {
         case TC_LINEAR:
-            *out=tc->coords.line.xyz.uVec;
+            // Ugly way to calculate overall unit vector
+            // TODO refactor and simply if possible
+            {
+                Vector6 v1, v2;
+                CartToVec(&tc->coords.line.xyz.start, &tc->coords.line.uvw.start, &v1);
+                CartToVec(&tc->coords.line.xyz.end, &tc->coords.line.uvw.end, &v2);
+                VecVecSub(&v2, &v1, out);
+                VecUnitEq(out);
+            }
             break;
         case TC_RIGIDTAP:
-            pmCartScalMult(&tc->coords.rigidtap.xyz.uVec, -1.0, out);
+            // Exit move is in opposite direction of tap direction
+            pmCartScalMult(&tc->coords.rigidtap.xyz.uVec, -1.0, &temp);
+            // Augment with zero vector, no re-scaling necessary
+            CartToVec(&temp, &zero, out);
             break;
         case TC_CIRCULAR:
+            // KLUDGE ignore UVW direction. this is WRONG, but since we don't
+            // do any tangent blends with circles and UVW motion, we can get
+            // away with it for now.
             pmCircleTangentVector(&tc->coords.circle.xyz,
-                    tc->coords.circle.xyz.angle, out);
+                    tc->coords.circle.xyz.angle, &temp);
+            CartToVec(&temp, &zero, out);
             break;
         default:
             rtapi_print_msg(RTAPI_MSG_ERR, "Invalid motion type %d!\n",tc->motion_type);
@@ -314,9 +339,9 @@ int tcGetPosReal(TC_STRUCT const * const tc, int of_point, EmcPose * const pos)
                     &abc);
             break;
         case TC_CIRCULAR:
-            res_fit = pmCircleAngleFromProgress(&tc->coords.circle.xyz,
+            angle = pmCircleAngleFromParam(&tc->coords.circle.xyz,
                     &tc->coords.circle.fit,
-                    progress, &angle);
+                    progress / tc->target);
             pmCirclePoint(&tc->coords.circle.xyz,
                     angle,
                     &xyz);
@@ -328,11 +353,11 @@ int tcGetPosReal(TC_STRUCT const * const tc, int of_point, EmcPose * const pos)
                     &uvw);
             break;
         case TC_SPHERICAL:
-            arcPoint(&tc->coords.arc.xyz,
+            arcPointCart(&tc->coords.arc.xyz,
                     progress,
-                    &xyz);
+                    &xyz,
+                    &uvw);
             abc = tc->coords.arc.abc;
-            uvw = tc->coords.arc.uvw;
             break;
     }
 
@@ -364,42 +389,57 @@ int tcSetTermCond(TC_STRUCT * const tc, int term_cond) {
  * (line-arc-line).
  */
 int tcConnectBlendArc(TC_STRUCT * const prev_tc, TC_STRUCT * const tc,
-        PmCartesian const * const circ_start,
-        PmCartesian const * const circ_end) {
-
+        Vector6 const * const circ_start,
+        Vector6 const * const circ_end)
+{
     /* Only shift XYZ for now*/
+    PmCartesian xyz1, uvw1;
     if (prev_tc) {
+        VecToCart(circ_start, &xyz1, &uvw1);
+
         tp_debug_print("connect: keep prev_tc\n");
         //Have prev line, need to shorten it
         pmCartLineInit(&prev_tc->coords.line.xyz,
-                &prev_tc->coords.line.xyz.start, circ_start);
+                &prev_tc->coords.line.xyz.start, &xyz1);
+        pmCartLineInit(&prev_tc->coords.line.uvw,
+                &prev_tc->coords.line.uvw.start, &uvw1);
         tp_debug_print("Old target = %f\n", prev_tc->target);
-        prev_tc->target = prev_tc->coords.line.xyz.tmag;
+        prev_tc->target = pmLine9Target(&prev_tc->coords.line);
         tp_debug_print("Target = %f\n",prev_tc->target);
         //Setup tangent blending constraints
         tcSetTermCond(prev_tc, TC_TERM_COND_TANGENT);
-        tp_debug_print(" L1 end  : %f %f %f\n",prev_tc->coords.line.xyz.end.x,
+        tp_debug_print(" L1 end xyz : %f %f %f\n",prev_tc->coords.line.xyz.end.x,
                 prev_tc->coords.line.xyz.end.y,
                 prev_tc->coords.line.xyz.end.z);
+        tp_debug_print(" L1 end uvw : %f %f %f\n",prev_tc->coords.line.uvw.end.x,
+                prev_tc->coords.line.uvw.end.y,
+                prev_tc->coords.line.uvw.end.z);
     } else {
         tp_debug_print("connect: consume prev_tc\n");
     }
 
+    PmCartesian xyz2, uvw2;
+    VecToCart(circ_end, &xyz2, &uvw2);
     //Shorten next line
-    pmCartLineInit(&tc->coords.line.xyz, circ_end, &tc->coords.line.xyz.end);
+    pmCartLineInit(&tc->coords.line.xyz, &xyz2, &tc->coords.line.xyz.end);
+    pmCartLineInit(&tc->coords.line.uvw, &uvw2, &tc->coords.line.uvw.end);
 
     tp_info_print(" L2: old target = %f\n", tc->target);
-    tc->target = tc->coords.line.xyz.tmag;
+    tc->target = pmLine9Target(&tc->coords.line);
     tp_info_print(" L2: new target = %f\n", tc->target);
-    tp_debug_print(" L2 start  : %f %f %f\n",tc->coords.line.xyz.start.x,
+    tp_debug_print(" L2 start xyz : %f %f %f\n",tc->coords.line.xyz.start.x,
             tc->coords.line.xyz.start.y,
             tc->coords.line.xyz.start.z);
+
+    tp_debug_print(" L2 start uvw : %f %f %f\n",tc->coords.line.uvw.start.x,
+            tc->coords.line.uvw.start.y,
+            tc->coords.line.uvw.start.z);
 
     //Disable flag for parabolic blending with previous
     tc->blend_prev = 0;
 
-    tp_info_print("       Q1: %f %f %f\n",circ_start->x,circ_start->y,circ_start->z);
-    tp_info_print("       Q2: %f %f %f\n",circ_end->x,circ_end->y,circ_end->z);
+    tp_info_print("       Q1: %f %f %f\n", xyz1.x,xyz1.y,xyz1.z);
+    tp_info_print("       Q2: %f %f %f\n", xyz2.x,xyz2.y,xyz2.z);
 
     return 0;
 }
@@ -484,10 +524,17 @@ int tcFlagEarlyStop(TC_STRUCT * const tc,
 
 double pmLine9Target(PmLine9 * const line9)
 {
-    if (!line9->xyz.tmag_zero) {
-        return line9->xyz.tmag;
-    } else if (!line9->uvw.tmag_zero) {
-        return line9->uvw.tmag;
+    tp_debug_print("xyz mag = %.12e, abc mag = %.12e, uvw mag = %.12e,",
+            line9->xyz.tmag,
+            line9->abc.tmag,
+            line9->uvw.tmag);
+    tp_debug_print("tmag_zero %d %d %d\n",
+            line9->xyz.tmag_zero,
+            line9->abc.tmag_zero,
+            line9->uvw.tmag_zero);
+
+    if (!line9->xyz.tmag_zero || !line9->uvw.tmag_zero) {
+        return pmSqrt(pmSq(line9->xyz.tmag) + pmSq(line9->uvw.tmag));
     } else if (!line9->abc.tmag_zero) {
         return line9->abc.tmag;
     } else {
@@ -626,7 +673,8 @@ double pmCircle9Target(PmCircle9 const * const circ9)
     pmCartMagSq(&circ9->xyz.rHelix, &h2);
     double helical_length = pmSqrt(pmSq(circ9->fit.total_planar_length) + h2);
 
-    return helical_length;
+    double uvw_length = circ9->uvw.tmag;
+    return pmSqrt(pmSq(helical_length) + pmSq(uvw_length));
 }
 
 /**
@@ -653,13 +701,28 @@ int tcFinalizeLength(TC_STRUCT * const tc)
     int parabolic = (tc->blend_prev || tc->term_cond == TC_TERM_COND_PARABOLIC);
     tp_debug_print("blend_prev = %d, term_cond = %d\n",tc->blend_prev, tc->term_cond);
 
-    if (tc->motion_type == TC_CIRCULAR) {
-        tc->maxvel = pmCircleActualMaxVel(&tc->coords.circle.xyz, &tc->acc_ratio_tan, tc->maxvel, tc->maxaccel, parabolic);
-    }
+    tcClampVelocityByRadius(tc, parabolic);
 
     tcClampVelocityByLength(tc);
 
     tc->finalized = 1;
+    return TP_ERR_OK;
+}
+
+
+int tcClampVelocityByRadius(TC_STRUCT * const tc, bool parabolic)
+{
+    if (!tc || tc->motion_type != TC_CIRCULAR || tc->target < TP_POS_EPSILON) {
+        return TP_ERR_FAIL;
+    }
+
+    //KLUDGE work backwards to get the XYZ-projected maximum velocity
+    double xyz_ratio = pmSqrt((pmSq(tc->target) - pmSq(tc->coords.circle.uvw.tmag)) / pmSq(tc->target));
+    double xyz_maxvel = xyz_ratio * tc->maxvel;
+    double xyz_maxaccel = xyz_ratio * tc->maxaccel;
+
+    double clipped_maxvel = pmCircleActualMaxVel(&tc->coords.circle.xyz, &tc->acc_ratio_tan, xyz_maxvel, xyz_maxaccel, parabolic);
+    tc->maxvel = clipped_maxvel / xyz_ratio;
     return TP_ERR_OK;
 }
 
@@ -680,7 +743,8 @@ int tcClampVelocityByLength(TC_STRUCT * const tc)
 }
 
 /**
- * compute the total arc length of a circle segment
+ * compute the total arc length of a circle segment.
+ * FIXME redundant now, remove and replace if possible
  */
 int tcUpdateTargetFromCircle(TC_STRUCT * const tc)
 {
@@ -688,11 +752,7 @@ int tcUpdateTargetFromCircle(TC_STRUCT * const tc)
         return TP_ERR_FAIL;
     }
 
-    double h2;
-    pmCartMagSq(&tc->coords.circle.xyz.rHelix, &h2);
-    double helical_length = pmSqrt(pmSq(tc->coords.circle.fit.total_planar_length) + h2);
-
-    tc->target = helical_length;
+    tc->target = pmCircle9Target(&tc->coords.circle);
     return TP_ERR_OK;
 }
 

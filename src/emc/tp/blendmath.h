@@ -6,7 +6,7 @@
 * License: GPL Version 2
 * System: Linux
 *    
-* Copyright (c) 2014 All rights reserved.
+* Copyright (c) 2014-2015 All rights reserved.
 *
 * Last change:
 ********************************************************************/
@@ -15,6 +15,7 @@
 
 #include "posemath.h"
 #include "tc_types.h"
+#include "vector6.h"
 
 #define BLEND_ACC_RATIO_TANGENTIAL 0.5
 #define BLEND_ACC_RATIO_NORMAL (pmSqrt(1.0 - pmSq(BLEND_ACC_RATIO_TANGENTIAL)))
@@ -49,16 +50,6 @@ typedef struct {
     double v_max2;          /* maximum velocity in direction u_tan2 */
 
 } BlendGeom3;
-
-/**
- * 9D Input geometry for a spherical blend arc.
- */
-#ifdef BLEND_9D
-typedef struct {
-//Not implemented yet
-} BlendGeom9;
-#endif 
-
 
 /**
  * Blend arc parameters (abstracted).
@@ -113,13 +104,6 @@ typedef struct {
 } BlendPoints3;
 
 
-
-#ifdef BLEND_9D
-typedef struct {
-//Not implemented yet
-} BlendPoints9;
-#endif
-
 double findMaxTangentAngle(double v, double acc, double cycle_time);
 
 double findKinkAccel(double kink_angle, double v_plan, double cycle_time);
@@ -134,38 +118,29 @@ double saturate(double x, double max);
 
 int sat_inplace(double * const x, double max);
 
-int checkTangentAngle(PmCircle const * const circ, SphericalArc const * const arc, BlendGeom3 const * const geom, BlendParameters const * const param, double cycle_time, int at_end);
+int checkTangentAngle(PmCircle const * const circ, SphericalArc const * const arc, BlendParameters const * const param, double cycle_time, int at_end);
 
-int findIntersectionAngle(PmCartesian const * const u1,
+int findIntersectionAngle3(PmCartesian const * const u1,
         PmCartesian const * const u2, double * const theta);
-
-double pmCartMin(PmCartesian const * const in);
 
 int calculateInscribedDiameter(PmCartesian const * const normal,
         PmCartesian const * const bounds, double * const diameter);
 
-int findAccelScale(PmCartesian const * const acc,
-        PmCartesian const * const bounds,
-        PmCartesian * const scale);
+int findAccelScale(Vector6 const * const acc,
+        Vector6 const * const bounds,
+        double * m_out);
 
 int pmCartCartParallel(PmCartesian const * const v1,
         PmCartesian const * const v2, double tol);
-
-int pmCircLineCoplanar(PmCircle const * const circ,
-        PmCartLine const * const line, double tol);
-
-int blendCoplanarCheck(PmCartesian const * const normal,
-        PmCartesian const * const u1_tan,
-        PmCartesian const * const u2_tan,
-        double tol);
 
 int blendCalculateNormals3(BlendGeom3 * const geom);
 
 int blendComputeParameters(BlendParameters * const param);
 
 int blendCheckConsume(BlendParameters * const param,
-        BlendPoints3 const * const points,
-        TC_STRUCT const * const prev_tc, int gap_cycles);
+        double trim,
+        TC_STRUCT const * const prev_tc,
+        int gap_cycles);
 
 int blendFindPoints3(BlendPoints3 * const points, BlendGeom3 const * const geom,
         BlendParameters const * const param);
@@ -222,13 +197,16 @@ int blendArcLinePostProcess(BlendPoints3 * const points, BlendPoints3 const * co
         BlendParameters * const param, BlendGeom3 const * const geom,
         PmCircle const * const circ1, PmCartLine const * const line2);
 
-int arcFromBlendPoints3(SphericalArc * const arc, BlendPoints3 const * const points,
-        BlendGeom3 const * const geom, BlendParameters const * const param);
+int arcFromBlendPoints3(SphericalArc * const arc,
+        BlendPoints3 const * const points,
+        BlendGeom3 const * const geom,
+        BlendParameters const * const param,
+        PmCartesian const * const uvw);
 
-//Not implemented yet
 int blendGeom3Print(BlendGeom3 const * const geom);
 int blendParamPrint(BlendParameters const * const param);
 int blendPoints3Print(BlendPoints3 const * const points);
+
 double pmCircleActualMaxVel(PmCircle * const circle,
         double * const acc_ratio,
         double v_max,
@@ -236,10 +214,9 @@ double pmCircleActualMaxVel(PmCircle * const circle,
         int parabolic);
 int findSpiralArcLengthFit(PmCircle const * const circle,
         SpiralArcLengthFit * const fit);
-int pmCircleAngleFromProgress(PmCircle const * const circle,
+double pmCircleAngleFromParam(PmCircle const * const circle,
         SpiralArcLengthFit const * const fit,
-        double progress,
-        double * const angle);
+        double t);
 double pmCircleEffectiveMinRadius(PmCircle const * const circle);
 
 #endif

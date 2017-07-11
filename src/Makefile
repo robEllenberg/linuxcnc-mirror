@@ -284,6 +284,7 @@ HEADERS := \
     emc/tp/tp_types.h \
     emc/tp/spherical_arc.h \
     emc/tp/blendmath.h \
+    emc/tp/blendmath6.h \
     emc/motion/emcmotcfg.h \
     emc/motion/motion.h \
     emc/motion/simple_tp.h \
@@ -347,6 +348,7 @@ HEADERS := \
     libnml/posemath/gotypes.h \
     libnml/posemath/gomath.h \
     libnml/posemath/sincos.h \
+    libnml/posemath/vector6.h \
     libnml/rcs/rcs.hh \
     libnml/rcs/rcs_exit.hh \
     libnml/rcs/rcs_print.hh \
@@ -970,6 +972,7 @@ motmod-objs += emc/tp/tcq.o
 motmod-objs += emc/tp/tp.o
 motmod-objs += emc/tp/spherical_arc.o
 motmod-objs += emc/tp/blendmath.o
+motmod-objs += emc/tp/blendmath6.o
 motmod-objs += emc/motion/motion.o
 motmod-objs += emc/motion/command.o
 motmod-objs += emc/motion/control.o
@@ -980,6 +983,7 @@ motmod-objs += emc/motion/stashf.o
 motmod-objs += emc/motion/dbuf.o
 motmod-objs += emc/nml_intf/emcpose.o
 motmod-objs += libnml/posemath/_posemath.o
+motmod-objs += libnml/posemath/vector6.o
 motmod-objs += libnml/posemath/sincos.o $(MATHSTUB)
 
 TORTOBJS = $(foreach file,$($(patsubst %.o,%,$(1))-objs), objects/rt$(file))
