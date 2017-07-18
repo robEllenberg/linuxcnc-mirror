@@ -47,8 +47,11 @@
 
 //Simple compile-time debug macro
 #ifdef EMCCANON_DEBUG
+#include <iostream>
 #define canon_debug(...) printf(__VA_ARGS__)
+#define debug_canon_var(varname) (std::cout << #varname << " = " << varname)
 #else
+#define debug_canon_var(varname)
 #define canon_debug(...)
 #endif
 
@@ -110,20 +113,49 @@ static int rotary_unlock_for_traverse = -1;
 
 #define AXIS_PERIOD(axisnum) (IS_PERIODIC(axisnum) ? 360 : 0)
 
-//KLUDGE kinematic data struct (instead of returning a single float value)
-//FIXME This should really be refactored into a more general structure, but this
-//means tearing up the getStraightXXX functions, which probably means
-//converting to canon_position operators
+
+/**
+ *  Holds results of velocity calculations for a straight segment.
+ *  @todo This should really be refactored into a more general structure, but
+ *  this means tearing up the getStraightXXX functions, which probably means
+ *  converting to canon_position operators.
+ *  @todo replace redundant data with member functions (to simplify GetStraightXXX functions)
+ */
 struct VelData {
+    VelData(double default_feed) : tmax(0),
+        vel(std::max(default_feed, 0.0)),
+        dtot(0),
+        d_xyz(0),
+        d_uvw(0),
+        vel_xyz(0),
+        vel_uvw(0) {}
+
+    /** Total time required to complete move for all axes */
     double tmax;
+
+    /** 6D cartesian velocity OR angular velocity, depending on move type */
     double vel;
+
+    /** Total straight-line distance traveled along the line (6D). */
     double dtot;
+
+    /** KLUDGE need this to calculate UVW motion distance for circular arcs in XYZ. */
+    double d_xyz;
+    double d_uvw;
+
+    /** Just the XYZ component of velocity */
+    double vel_xyz;
+
+    /** Just the UVW component of velocity */
+    double vel_uvw;
 };
 
 struct AccelData{
     double tmax;
     double acc;
     double dtot;
+    // Used to factor in UVW acceleration when combined with an XYZ circle
+    double d_uvw;
 };
 
 static PM_QUATERNION quat(1, 0, 0, 0);
@@ -602,11 +634,7 @@ static AccelData getStraightAcceleration(double x, double y, double z,
 {
     double dx, dy, dz, du, dv, dw, da, db, dc;
     double tx, ty, tz, tu, tv, tw, ta, tb, tc;
-    AccelData out;
-
-    out.acc = 0.0; // if a move to nowhere
-    out.tmax = 0.0;
-    out.dtot = 0.0;
+    AccelData out = {0};
 
     // Compute absolute travel distance for each axis:
     dx = fabs(x - canonEndPoint.x);
@@ -635,82 +663,62 @@ static AccelData getStraightAcceleration(double x, double y, double z,
 
     // Figure out what kind of move we're making.  This is used to determine
     // the units of vel/acc.
-    if (dx <= 0.0 && dy <= 0.0 && dz <= 0.0 &&
-        du <= 0.0 && dv <= 0.0 && dw <= 0.0) {
-	cartesian_move = 0;
+    if (dx > 0.0 || dy > 0.0 || dz > 0.0 ||
+            du > 0.0 || dv > 0.0 || dw > 0.0) {
+        cartesian_move = 1;
     } else {
-	cartesian_move = 1;
+        cartesian_move = 0;
     }
-    if (da <= 0.0 && db <= 0.0 && dc <= 0.0) {
-	angular_move = 0;
+    if (da > 0.0 || db > 0.0 || dc > 0.0) {
+        angular_move = 1;
     } else {
-	angular_move = 1;
+        angular_move = 0;
     }
 
-    // Pure linear move:
-    if (cartesian_move && !angular_move) {
+    // Compute the "time^2" values for each axis. This is analogous to the
+    // velocity calcultion, though not an actual physical quantity.
 	tx = dx? (dx / FROM_EXT_LEN(axis_max_acceleration[0])): 0.0;
 	ty = dy? (dy / FROM_EXT_LEN(axis_max_acceleration[1])): 0.0;
 	tz = dz? (dz / FROM_EXT_LEN(axis_max_acceleration[2])): 0.0;
-	tu = du? (du / FROM_EXT_LEN(axis_max_acceleration[6])): 0.0;
-	tv = dv? (dv / FROM_EXT_LEN(axis_max_acceleration[7])): 0.0;
-	tw = dw? (dw / FROM_EXT_LEN(axis_max_acceleration[8])): 0.0;
-        out.tmax = MAX3(tx, ty ,tz);
-        out.tmax = MAX4(tu, tv, tw, out.tmax);
-
-        if(dx || dy || dz)
-            out.dtot = sqrt(dx * dx + dy * dy + dz * dz);
-        else
-            out.dtot = sqrt(du * du + dv * dv + dw * dw);
-        
-	if (out.tmax > 0.0) {
-	    out.acc = out.dtot / out.tmax;
-	}
-    }
-    // Pure angular move:
-    else if (!cartesian_move && angular_move) {
 	ta = da? (da / FROM_EXT_ANG(axis_max_acceleration[3])): 0.0;
 	tb = db? (db / FROM_EXT_ANG(axis_max_acceleration[4])): 0.0;
 	tc = dc? (dc / FROM_EXT_ANG(axis_max_acceleration[5])): 0.0;
+	tu = du? (du / FROM_EXT_LEN(axis_max_acceleration[6])): 0.0;
+	tv = dv? (dv / FROM_EXT_LEN(axis_max_acceleration[7])): 0.0;
+	tw = dw? (dw / FROM_EXT_LEN(axis_max_acceleration[8])): 0.0;
+
+    // Pure angular move:
+    if (!cartesian_move && angular_move) {
         out.tmax = MAX3(ta, tb, tc);
 
-	out.dtot = sqrt(da * da + db * db + dc * dc);
-	if (out.tmax > 0.0) {
-	    out.acc = out.dtot / out.tmax;
-	}
+        out.dtot = sqrt(da * da + db * db + dc * dc);
+        if (out.tmax > 0.0) {
+            out.acc = out.dtot / out.tmax;
+        }
     }
     // Combination angular and linear move:
-    else if (cartesian_move && angular_move) {
-	tx = dx? (dx / FROM_EXT_LEN(axis_max_acceleration[0])): 0.0;
-	ty = dy? (dy / FROM_EXT_LEN(axis_max_acceleration[1])): 0.0;
-	tz = dz? (dz / FROM_EXT_LEN(axis_max_acceleration[2])): 0.0;
-	ta = da? (da / FROM_EXT_ANG(axis_max_acceleration[3])): 0.0;
-	tb = db? (db / FROM_EXT_ANG(axis_max_acceleration[4])): 0.0;
-	tc = dc? (dc / FROM_EXT_ANG(axis_max_acceleration[5])): 0.0;
-	tu = du? (du / FROM_EXT_LEN(axis_max_acceleration[6])): 0.0;
-	tv = dv? (dv / FROM_EXT_LEN(axis_max_acceleration[7])): 0.0;
-	tw = dw? (dw / FROM_EXT_LEN(axis_max_acceleration[8])): 0.0;
+    else {
         out.tmax = MAX9(tx, ty, tz,
-                    ta, tb, tc,
-                    tu, tv, tw);
+                ta, tb, tc,
+                tu, tv, tw);
 
-    if(debug_velacc)
-        printf("getStraightAcceleration t^2 tx %g ty %g tz %g ta %g tb %g tc %g tu %g tv %g tw %g\n", 
-               tx, ty, tz, ta, tb, tc, tu, tv, tw);
-/*  According to NIST IR6556 Section 2.1.2.5 Paragraph A
-    a combnation move is handled like a linear move, except
-    that the angular axes are allowed sufficient time to
-    complete their motion coordinated with the motion of
-    the linear axes.
-*/
-        if(dx || dy || dz)
-            out.dtot = sqrt(dx * dx + dy * dy + dz * dz);
-        else
-            out.dtot = sqrt(du * du + dv * dv + dw * dw);
+        if(debug_velacc)
+            printf("getStraightAcceleration t^2 tx %g ty %g tz %g ta %g tb %g tc %g tu %g tv %g tw %g\n", 
+                    tx, ty, tz, ta, tb, tc, tu, tv, tw);
+        /*  According to NIST IR6556 Section 2.1.2.5 Paragraph A
+            a combnation move is handled like a linear move, except
+            that the angular axes are allowed sufficient time to
+            complete their motion coordinated with the motion of
+            the linear axes.
+            */
+            if (du > 0 || dv >0 || dw > 0) {
+                out.d_uvw = sqrt(du * du + dv * dv + dw * dw);
+            }
+            out.dtot = sqrt(dx * dx + dy * dy + dz * dz + out.d_uvw * out.d_uvw);
 
-	if (out.tmax > 0.0) {
-	    out.acc = out.dtot / out.tmax;
-	}
+        if (out.tmax > 0.0) {
+            out.acc = out.dtot / out.tmax;
+        }
     }
     if(debug_velacc) 
         printf("cartesian %d ang %d acc %g\n", cartesian_move, angular_move, out.acc);
@@ -737,14 +745,8 @@ static VelData getStraightVelocity(double x, double y, double z,
 {
     double dx, dy, dz, da, db, dc, du, dv, dw;
     double tx, ty, tz, ta, tb, tc, tu, tv, tw;
-    VelData out;
-
-/* If we get a move to nowhere (!cartesian_move && !angular_move)
-   we might as well go there at the currentLinearFeedRate...
-*/
-    out.vel = currentLinearFeedRate;
-    out.tmax = 0;
-    out.dtot = 0;
+    // Start with safe default values
+    VelData out(currentLinearFeedRate);
 
     // Compute absolute travel distance for each axis:
     dx = fabs(x - canonEndPoint.x);
@@ -772,45 +774,31 @@ static VelData getStraightVelocity(double x, double y, double z,
                dx, dy, dz, da, db, dc, du, dv, dw);
 
     // Figure out what kind of move we're making:
-    if (dx <= 0.0 && dy <= 0.0 && dz <= 0.0 &&
-        du <= 0.0 && dv <= 0.0 && dw <= 0.0) {
-	cartesian_move = 0;
+    if (dx > 0.0 || dy > 0.0 || dz > 0.0 ||
+            du > 0.0 || dv > 0.0 || dw > 0.0) {
+        cartesian_move = 1;
     } else {
-	cartesian_move = 1;
+        cartesian_move = 0;
     }
-    if (da <= 0.0 && db <= 0.0 && dc <= 0.0) {
-	angular_move = 0;
+    if (da > 0.0 || db > 0.0 || dc > 0.0) {
+        angular_move = 1;
     } else {
-	angular_move = 1;
+        angular_move = 0;
     }
 
-    // Pure linear move:
-    if (cartesian_move && !angular_move) {
-        tx = dx? fabs(dx / FROM_EXT_LEN(axis_max_velocity[0])): 0.0;
-        ty = dy? fabs(dy / FROM_EXT_LEN(axis_max_velocity[1])): 0.0;
-        tz = dz? fabs(dz / FROM_EXT_LEN(axis_max_velocity[2])): 0.0;
-        tu = du? fabs(du / FROM_EXT_LEN(axis_max_velocity[6])): 0.0;
-        tv = dv? fabs(dv / FROM_EXT_LEN(axis_max_velocity[7])): 0.0;
-        tw = dw? fabs(dw / FROM_EXT_LEN(axis_max_velocity[8])): 0.0;
-        out.tmax = MAX3(tx, ty ,tz);
-        out.tmax = MAX4(tu, tv, tw, out.tmax);
+    // Calculate times required to cover the displacement for each axis
+    tx = dx? fabs(dx / FROM_EXT_LEN(axis_max_velocity[0])): 0.0;
+    ty = dy? fabs(dy / FROM_EXT_LEN(axis_max_velocity[1])): 0.0;
+    tz = dz? fabs(dz / FROM_EXT_LEN(axis_max_velocity[2])): 0.0;
+    ta = da? fabs(da / FROM_EXT_ANG(axis_max_velocity[3])): 0.0;
+    tb = db? fabs(db / FROM_EXT_ANG(axis_max_velocity[4])): 0.0;
+    tc = dc? fabs(dc / FROM_EXT_ANG(axis_max_velocity[5])): 0.0;
+    tu = du? fabs(du / FROM_EXT_LEN(axis_max_velocity[6])): 0.0;
+    tv = dv? fabs(dv / FROM_EXT_LEN(axis_max_velocity[7])): 0.0;
+    tw = dw? fabs(dw / FROM_EXT_LEN(axis_max_velocity[8])): 0.0;
 
-        if(dx || dy || dz)
-            out.dtot = sqrt(dx * dx + dy * dy + dz * dz);
-        else
-            out.dtot = sqrt(du * du + dv * dv + dw * dw);
-
-        if (out.tmax <= 0.0) {
-            out.vel = currentLinearFeedRate;
-        } else {
-            out.vel = out.dtot / out.tmax;
-        }
-    }
     // Pure angular move:
-    else if (!cartesian_move && angular_move) {
-        ta = da? fabs(da / FROM_EXT_ANG(axis_max_velocity[3])):0.0;
-        tb = db? fabs(db / FROM_EXT_ANG(axis_max_velocity[4])):0.0;
-        tc = dc? fabs(dc / FROM_EXT_ANG(axis_max_velocity[5])):0.0;
+    if (!cartesian_move && angular_move) {
         out.tmax = MAX3(ta, tb, tc);
 
         out.dtot = sqrt(da * da + db * db + dc * dc);
@@ -820,17 +808,8 @@ static VelData getStraightVelocity(double x, double y, double z,
             out.vel = out.dtot / out.tmax;
         }
     }
-    // Combination angular and linear move:
-    else if (cartesian_move && angular_move) {
-        tx = dx? fabs(dx / FROM_EXT_LEN(axis_max_velocity[0])): 0.0;
-        ty = dy? fabs(dy / FROM_EXT_LEN(axis_max_velocity[1])): 0.0;
-        tz = dz? fabs(dz / FROM_EXT_LEN(axis_max_velocity[2])): 0.0;
-        ta = da? fabs(da / FROM_EXT_ANG(axis_max_velocity[3])): 0.0;
-        tb = db? fabs(db / FROM_EXT_ANG(axis_max_velocity[4])): 0.0;
-        tc = dc? fabs(dc / FROM_EXT_ANG(axis_max_velocity[5])): 0.0;
-        tu = du? fabs(du / FROM_EXT_LEN(axis_max_velocity[6])): 0.0;
-        tv = dv? fabs(dv / FROM_EXT_LEN(axis_max_velocity[7])): 0.0;
-        tw = dw? fabs(dw / FROM_EXT_LEN(axis_max_velocity[8])): 0.0;
+    // Combination angular and linear move (or pure linear move)
+    else {
         out.tmax = MAX9(tx, ty, tz,
                 ta, tb, tc,
                 tu, tv, tw);
@@ -845,15 +824,18 @@ static VelData getStraightVelocity(double x, double y, double z,
             complete their motion coordinated with the motion of
             the linear axes.
             */
-        if(dx || dy || dz)
-            out.dtot = sqrt(dx * dx + dy * dy + dz * dz);
-        else
-            out.dtot = sqrt(du * du + dv * dv + dw * dw);
+        out.d_xyz = sqrt(dx * dx + dy * dy + dz * dz);
+        out.d_uvw = sqrt(du * du + dv * dv + dw * dw);
+        out.dtot = sqrt(out.d_xyz * out.d_xyz + out.d_uvw * out.d_uvw);
 
         if (out.tmax <= 0.0) {
             out.vel = currentLinearFeedRate;
+            out.vel_xyz = out.vel;
+            out.vel_uvw = out.vel;
         } else {
             out.vel = out.dtot / out.tmax;
+            out.vel_xyz = out.d_xyz / out.tmax;
+            out.vel_uvw = out.d_uvw / out.tmax;
         }
     }
     if(debug_velacc) 
@@ -890,6 +872,7 @@ static void flush_segments(void) {
     double u = pos.u, v = pos.v, w = pos.w;
     
     int line_no = pos.line_no;
+    canon_debug("Flushing segments up to line %d\n", line_no);
 
 #ifdef SHOW_JOINED_SEGMENTS
     for(unsigned int i=0; i != chained_points.size(); i++) { printf("."); }
@@ -897,22 +880,23 @@ static void flush_segments(void) {
 #endif
 
     VelData linedata = getStraightVelocity(x, y, z, a, b, c, u, v, w);
-    double vel = linedata.vel;
 
-    if (cartesian_move && !angular_move) {
-        if (vel > currentLinearFeedRate) {
-            vel = currentLinearFeedRate;
-        }
-    } else if (!cartesian_move && angular_move) {
+    double vel = linedata.vel;
+    if (cartesian_move) {
+        // Limit velocity of XYZ and UVW axis sets to the cartesian feed rate.
+        double clipped_xyz = std::min(linedata.vel_xyz, currentLinearFeedRate);
+        double clipped_uvw = std::min(linedata.vel_uvw, currentLinearFeedRate);
+
+        // However, the 6D velocity (XYZUVW all moving together) can be higher
+        vel = sqrt(pow(clipped_xyz, 2) + pow(clipped_uvw, 2));
+
+        canon_debug("cartesian move, linear feed is %f\n", vel);
+    } else if (angular_move) {
         if (vel > currentAngularFeedRate) {
             vel = currentAngularFeedRate;
         }
-    } else if (cartesian_move && angular_move) {
-        if (vel > currentLinearFeedRate) {
-            vel = currentLinearFeedRate;
-        }
-    }
-
+        canon_debug("angular move, feed is %f\n", vel);
+    } 
 
     EMC_TRAJ_LINEAR_MOVE linearMoveMsg;
     linearMoveMsg.feed_mode = feed_mode;
@@ -961,6 +945,66 @@ static void get_last_pos(double &lx, double &ly, double &lz) {
     }
 }
 
+
+/**
+ * Compute distance from a point to a finite line segment.
+ * @param P0 first point of line segment
+ * @param P1 second point of line segment
+ * @param R point to test
+ * @return distance between point and segment
+ *
+ * Uses the voronoi regions of a line segment to compute distance:
+ *
+ *       .                        .
+ *       .         (2)            .
+ *       .                        .
+ * (1)   x-------line-segment-----x      (4)
+ *       . P0                     . P1
+ *       .                        .
+ *       .          (3)           .
+ *       .                        .
+ *
+ *  If the test point lies in regions 2 / 3 in the above diagram, we find the
+ *  perpendicular distance to the line.
+ *  In region (1), the distance to the segment is R - P0
+ *  In region (4), the distance to the segment is R - P1
+ */
+static double distance_to_segment(PM_CARTESIAN const & P0,
+        PM_CARTESIAN const & P1,
+        PM_CARTESIAN const & R)
+{
+    // Find relative distances from first point
+    PM_CARTESIAN V = R - P0;
+    PM_CARTESIAN M = P1 - P0;
+
+    // Project onto M
+    double base_dist_sq = dot(M, M);
+
+    // Distance along the line segment to the point closest to R (if R is in
+    // region 2/3)
+    double t0;
+    if (base_dist_sq > tiny) {
+        t0 = dot(M, V) / base_dist_sq;
+    } else {
+        // Degenerate segment, use end point to calculate distance
+        t0 = 1;
+    }
+
+    // Clip t0 if R lies in region 1 / 4
+    if(t0 < 0) {
+        t0 = 0;
+    } else if (t0 > 1) {
+        t0 = 1;
+    }
+
+    // Subtract away parallel component to find perpendicular distance.
+    return mag(V - t0 * M);
+}
+
+
+/**
+ * Check if we can skip over intermediate points.
+ */
 static bool
 linkable(double x, double y, double z, 
          double a, double b, double c, 
@@ -972,27 +1016,29 @@ linkable(double x, double y, double z,
     if(chained_points.size() > 100) return false;
 
     //If ABCUVW motion, then the tangent calculation fails?
-    // TODO is there a fundamental reason that we can't handle 9D motion here?
     if(a != pos.a) return false;
     if(b != pos.b) return false;
     if(c != pos.c) return false;
-    if(u != pos.u) return false;
-    if(v != pos.v) return false;
-    if(w != pos.w) return false;
 
-    if(x==canonEndPoint.x && y==canonEndPoint.y && z==canonEndPoint.z) return false;
+    canon_debug("Testing for motion\n");
+    if(x==canonEndPoint.x && y==canonEndPoint.y && z==canonEndPoint.z && u==canonEndPoint.u && v==canonEndPoint.v && w==canonEndPoint.w ) return false;
+    
+    // start and end points of "merged" segment.
+    PM_CARTESIAN P0(canonEndPoint.x, canonEndPoint.y, canonEndPoint.z);
+    PM_CARTESIAN P1(x,y,z);
+
+    PM_CARTESIAN U0(canonEndPoint.u, canonEndPoint.u, canonEndPoint.u);
+    PM_CARTESIAN U1(u,v,w);
     
     for(std::vector<struct pt>::iterator it = chained_points.begin();
             it != chained_points.end(); it++) {
-        PM_CARTESIAN M(x-canonEndPoint.x, y-canonEndPoint.y, z-canonEndPoint.z),
-                     B(canonEndPoint.x, canonEndPoint.y, canonEndPoint.z),
-                     P(it->x, it->y, it->z);
-        double t0 = dot(M, P-B) / dot(M, M);
-        if(t0 < 0) t0 = 0;
-        if(t0 > 1) t0 = 1;
-
-        double D = mag(P - (B + t0 * M));
-        if(D > canonNaivecamTolerance) return false;
+        PM_CARTESIAN P(it->x, it->y, it->z);
+        PM_CARTESIAN U(it->u, it->v, it->w);
+        double D_xyz = distance_to_segment(P0, P1, P);
+        double D_uvw = distance_to_segment(U0, U1, U);
+        debug_canon_var(D_xyz);
+        debug_canon_var(D_uvw);
+        if( D_xyz > canonNaivecamTolerance || D_uvw > canonNaivecamTolerance) return false;
     }
     return true;
 }
@@ -1002,22 +1048,12 @@ see_segment(int line_number,
 	    double x, double y, double z, 
             double a, double b, double c,
             double u, double v, double w) {
-    bool changed_abc = (a != canonEndPoint.a)
-        || (b != canonEndPoint.b)
-        || (c != canonEndPoint.c);
-
-    bool changed_uvw = (u != canonEndPoint.u)
-        || (v != canonEndPoint.v)
-        || (w != canonEndPoint.w);
-
     if(!chained_points.empty() && !linkable(x, y, z, a, b, c, u, v, w)) {
         flush_segments();
     }
     pt pos = {x, y, z, a, b, c, u, v, w, line_number};
+    canon_debug("Adding line %d to chained points\n", line_number);
     chained_points.push_back(pos);
-    if(changed_abc || changed_uvw) {
-        flush_segments();
-    }
 }
 
 void FINISH() {
@@ -1077,6 +1113,9 @@ void STRAIGHT_FEED(int line_number,
 {
     EMC_TRAJ_LINEAR_MOVE linearMoveMsg;
     linearMoveMsg.feed_mode = feed_mode;
+
+    canon_debug("STRAIGHT_FEED x %g y %g z %g a %g b %g c %g u %g v %g w %g\n",
+            x, y, z, a, b, c, u, v, w);
 
     from_prog(x,y,z,a,b,c,u,v,w);
     rotate_and_offset_pos(x,y,z,a,b,c,u,v,w);
@@ -1145,19 +1184,15 @@ void STRAIGHT_PROBE(int line_number,
     VelData veldata = getStraightVelocity(x, y, z, a, b, c, u, v, w);
     ini_maxvel = vel = veldata.vel;
 
-    if (cartesian_move && !angular_move) {
-	if (vel > currentLinearFeedRate) {
-	    vel = currentLinearFeedRate;
-	}
-    } else if (!cartesian_move && angular_move) {
-	if (vel > currentAngularFeedRate) {
-	    vel = currentAngularFeedRate;
-	}
-    } else if (cartesian_move && angular_move) {
-	if (vel > currentLinearFeedRate) {
-	    vel = currentLinearFeedRate;
-	}
-    }
+    if (cartesian_move) {
+        if (veldata.vel_xyz > currentLinearFeedRate) {
+            vel *= currentLinearFeedRate / veldata.vel_xyz;
+        }
+    } else if (angular_move) {
+        if (vel > currentAngularFeedRate) {
+            vel = currentAngularFeedRate;
+        }
+    } 
 
     AccelData accdata = getStraightAcceleration(x, y, z, a, b, c, u, v, w);
     acc = accdata.acc;
@@ -1477,6 +1512,9 @@ void ARC_FEED(int line_number,
               double u, double v, double w)
 {
 
+    canon_debug("ARC_FEED a %g b %g c %g u %g v %g w %g ",
+            a, b, c, u, v, w);
+
     EMC_TRAJ_CIRCULAR_MOVE circularMoveMsg;
     EMC_TRAJ_LINEAR_MOVE linearMoveMsg;
 
@@ -1722,11 +1760,11 @@ void ARC_FEED(int line_number,
 
     //FIXME allow tangential acceleration like in TP
     double a_max_normal = a_max_axes * sqrt(3.0)/2.0;
-    canon_debug("a_max_axes = %f\n", a_max_axes);
+    debug_canon_var(a_max_axes);
 
     // Compute the centripetal acceleration
     double v_max_radial = sqrt(a_max_normal * effective_radius);
-    canon_debug("v_max_radial = %f\n", v_max_radial);
+    debug_canon_var(v_max_radial);
 
     // Restrict our maximum velocity in-plane if need be
     double v_max_planar = MIN(v_max_radial, v_max_axes);
@@ -1754,11 +1792,12 @@ void ARC_FEED(int line_number,
     // The spiral time is the min time needed to stay under the planar velocity limit.
     double t_max_spiral = spiral_length / v_max_planar;
 
+    double total_motion_length = sqrt(pow(total_xyz_length, 2) + pow(veldata.d_uvw, 2));
     // Now, compute actual XYZ max velocity from this min time and the total arc length
     double t_max = fmax(t_max_motion, t_max_spiral);
 
-    double v_max = total_xyz_length / t_max;
-    canon_debug("v_max = %f\n", v_max);
+    double v_max = total_motion_length / t_max;
+    debug_canon_var(v_max);
 
 
 //COMPUTE ACCEL
@@ -1773,15 +1812,24 @@ void ARC_FEED(int line_number,
 
     // a_max could be higher than a_max_axes, but the projection onto the
     // circle plane and helical axis will still be within limits
-    double a_max = total_xyz_length / tt_max;
+    // Also factor in UVW acceleration here
+    double a_max = total_motion_length / tt_max;
 
     // Limit velocity by maximum
-    double vel = MIN(currentLinearFeedRate, v_max);
-    canon_debug("current F = %f\n",currentLinearFeedRate);
-    canon_debug("vel = %f\n",vel);
+    // TODO scale by only XYZ
+    double vel_uvw = veldata.d_uvw / t_max;
+    //KLUDGE roll UVW velocity in
+    double vel_xyz = sqrt(v_max * v_max - vel_uvw * vel_uvw);
 
-    canon_debug("v_max = %f\n",v_max);
-    canon_debug("a_max = %f\n",a_max);
+    double vel_clipped = MIN(currentLinearFeedRate, vel_xyz);
+    double v_req = v_max * vel_clipped / vel_xyz;
+
+
+    // Dump final values for debugging
+    debug_canon_var(currentLinearFeedRate);
+    debug_canon_var(v_req);
+    debug_canon_var(v_max);
+    debug_canon_var(a_max);
 
     cartesian_move = 1;
 
@@ -1791,11 +1839,11 @@ void ARC_FEED(int line_number,
         // or we wouldn't be calling ARC_FEED
         linearMoveMsg.end = to_ext_pose(endpt);
         linearMoveMsg.type = EMC_MOTION_TYPE_ARC;
-        linearMoveMsg.vel = toExtVel(vel);
+        linearMoveMsg.vel = toExtVel(v_req);
         linearMoveMsg.ini_maxvel = toExtVel(v_max);
         linearMoveMsg.acc = toExtAcc(a_max);
         linearMoveMsg.indexrotary = -1;
-        if(vel && a_max){
+        if(v_req && a_max){
             interp_list.set_line_number(line_number);
             interp_list.append(linearMoveMsg);
         }
@@ -1814,14 +1862,14 @@ void ARC_FEED(int line_number,
 
         circularMoveMsg.type = EMC_MOTION_TYPE_ARC;
 
-        circularMoveMsg.vel = toExtVel(vel);
+        circularMoveMsg.vel = toExtVel(v_req);
         circularMoveMsg.ini_maxvel = toExtVel(v_max);
         circularMoveMsg.acc = toExtAcc(a_max);
 
         //FIXME what happens if accel or vel is zero?
         // The end point is still updated, but nothing is added to the interp list
         // seems to be a crude way to indicate a zero length segment?
-        if(vel && a_max) {
+        if(v_req && a_max) {
             interp_list.set_line_number(line_number);
             interp_list.append(circularMoveMsg);
         }

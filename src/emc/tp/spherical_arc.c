@@ -12,15 +12,16 @@
  ********************************************************************/
 
 #include "posemath.h"
+#include "vector6.h"
 #include "spherical_arc.h"
 #include "tp_types.h"
 #include "rtapi_math.h"
 
 #include "tp_debug.h"
 
-int arcInitFromPoints(SphericalArc * const arc, PmCartesian const * const start,
-        PmCartesian const * const end,
-        PmCartesian const * const center)
+int arcInitFromPoints(SphericalArc * const arc, Vector6 const * const start,
+        Vector6 const * const end,
+        Vector6 const * const center)
 {
 #ifdef ARC_PEDANTIC
     if (!P0 || !P1 || !center) {
@@ -36,13 +37,13 @@ int arcInitFromPoints(SphericalArc * const arc, PmCartesian const * const start,
     arc->end = *end;
     arc->center = *center;
 
-    pmCartCartSub(start, center, &arc->rStart);
-    pmCartCartSub(end, center, &arc->rEnd);
+    VecVecSub(start, center, &arc->rStart);
+    VecVecSub(end, center, &arc->rEnd);
 
     // Find the radii at start and end. These are identical for a perfect spherical arc
     double radius0, radius1;
-    pmCartMag(&arc->rStart, &radius0);
-    pmCartMag(&arc->rEnd, &radius1);
+    VecMag(&arc->rStart, &radius0);
+    VecMag(&arc->rEnd, &radius1);
 
     tp_debug_print("radii are %g and %g\n",
             radius0,
@@ -57,15 +58,15 @@ int arcInitFromPoints(SphericalArc * const arc, PmCartesian const * const start,
     // Choose initial radius as nominal radius
     arc->radius = radius0;
 
-    // Get unit vectors from center to start and center to end
-    PmCartesian u0, u1;
-    pmCartScalMult(&arc->rStart, 1.0 / radius0, &u0);
-    pmCartScalMult(&arc->rEnd, 1.0 / radius1, &u1);
-
     // Find arc angle
-    double dot;
-    pmCartCartDot(&u0, &u1, &dot);
+    double dot=0.0;
+    VecVecDot(&arc->rStart, &arc->rEnd, &dot);
+
+    // Divide through by magnitudes of each vector
+    dot /= radius0;
+    dot /= radius1;
     arc->angle = acos(dot);
+
     tp_debug_print("spherical arc angle = %f\n", arc->angle);
 
     // Store spiral factor as radial difference. Archimedean spiral coef. a = spiral / angle
@@ -84,29 +85,49 @@ int arcInitFromPoints(SphericalArc * const arc, PmCartesian const * const start,
     return TP_ERR_OK;
 }
 
-int arcPoint(SphericalArc const * const arc, double progress, PmCartesian * const out)
+int arcPointCart(SphericalArc const * const arc, 
+        double angle_in,
+        PmCartesian * xyz,
+        PmCartesian * uvw)
 {
-    //TODO pedantic
 
-    //Convert progress to actual progress around the arc
+    Vector6 temp;
+    int res = arcPoint(arc, angle_in, &temp);
+    if (res) {
+        return res;
+    }
+
+    return VecToCart(&temp, xyz, uvw);
+}
+
+
+/**
+ * For a given progress along the arc, get the corresponding XYZUVW point.
+ */
+int arcPoint(SphericalArc const * const arc, double progress, Vector6 * const out)
+{
+    //Convert progress to actual progress around the arc. Progress = 0 when the
+    //line segment is complete, and the arc is just starting. "Negative"
+    //progress means we're on the line segment before the arc. This is an
+    //artifact of "consuming" the previous line segment.
     double net_progress = progress - arc->line_length;
     if (net_progress <= 0.0 && arc->line_length > 0) {
         tc_debug_print("net_progress = %f, line_length = %f\n", net_progress, arc->line_length);
         //Get position on line (not actually an angle in this case)
-        pmCartScalMult(&arc->uTan, net_progress, out);
-        pmCartCartAdd(out, &arc->start, out);
+        VecScalMult(&arc->uTan, net_progress, out);
+        VecVecAdd(out, &arc->start, out);
     } else {
         double angle_in = net_progress / arc->radius;
         tc_debug_print("angle_in = %f, angle_total = %f\n", angle_in, arc->angle);
         double scale0 = sin(arc->angle - angle_in) / arc->Sangle;
         double scale1 = sin(angle_in) / arc->Sangle;
 
-        PmCartesian interp0,interp1;
-        pmCartScalMult(&arc->rStart, scale0, &interp0);
-        pmCartScalMult(&arc->rEnd, scale1, &interp1);
+        Vector6 interp0,interp1;
+        VecScalMult(&arc->rStart, scale0, &interp0);
+        VecScalMult(&arc->rEnd, scale1, &interp1);
 
-        pmCartCartAdd(&interp0, &interp1, out);
-        pmCartCartAdd(&arc->center, out, out);
+        VecVecAdd(&interp0, &interp1, out);
+        VecVecAddEq(out, &arc->center);
     }
     return TP_ERR_OK;
 }
@@ -118,48 +139,6 @@ int arcLength(SphericalArc const * const arc, double * const length)
     return TP_ERR_OK;
 }
 
-int arcFromLines(SphericalArc * const arc, PmCartLine const * const line1,
-        PmCartLine const * const line2, double radius,
-        double blend_dist, double center_dist, PmCartesian * const start, PmCartesian * const end, int consume) {
-
-    PmCartesian center, normal, binormal;
-
-    // Pointer to middle point of line segment pair
-    PmCartesian const * const middle = &line1->end;
-    //TODO assert line1 end = line2 start?
-
-    //Calculate the normal direction of the arc from the difference
-    //between the unit vectors
-    pmCartCartSub(&line2->uVec, &line1->uVec, &normal);
-    pmCartUnitEq(&normal);
-    pmCartScalMultEq(&normal, center_dist);
-    pmCartCartAdd(middle, &normal, &center);
-
-    //Calculate the binormal (vector perpendicular to the plane of the
-    //arc)
-    pmCartCartCross(&line1->uVec, &line2->uVec, &binormal);
-    pmCartUnitEq(&binormal);
-
-    // Start point is blend_dist away from middle point in the
-    // negative direction of line1
-    pmCartScalMult(&line1->uVec, -blend_dist, start);
-    pmCartCartAdd(start, middle, start);
-
-    // End point is blend_dist away from middle point in the positive
-    // direction of line2
-    pmCartScalMult(&line2->uVec, blend_dist, end);
-    pmCartCartAddEq(end, middle);
-
-    //Handle line portion of line-arc
-    arc->uTan = line1->uVec;
-    if (consume) {
-        arc->line_length = line1->tmag - blend_dist;
-    } else {
-        arc->line_length = 0;
-    }
-
-    return arcInitFromPoints(arc, start, end, &center);
-}
 
 int arcConvexTest(PmCartesian const * const center,
         PmCartesian const * const P, PmCartesian const * const uVec, int reverse_dir)
@@ -177,26 +156,31 @@ int arcConvexTest(PmCartesian const * const center,
 
 int arcTangent(SphericalArc const * const arc, PmCartesian * const tan, int at_end)
 {
-    PmCartesian r_perp;
-    PmCartesian r_tan;
-
-    if (at_end) {
-        r_perp = arc->rEnd;
-    } else {
-        r_perp = arc->rStart;
+    if (!arc || !tan) {
+        return TP_ERR_MISSING_INPUT;
     }
 
-    pmCartCartCross(&arc->binormal, &r_perp, &r_tan);
-    //Get spiral component
-    double dr = arc->spiral / arc->angle;
+    // This section implements the derivative of the SLERP formula to get a
+    // local tangent vector.
+    const double theta = arc->angle;
+    const double t = (double)at_end;
+    const double k = theta / arc->Sangle;
+    const double k0 = -cos( (1.0 - t) * theta);
+    const double k1 = cos( t * theta);
 
-    //Get perpendicular component due to spiral
-    PmCartesian d_perp;
-    pmCartUnit(&r_perp, &d_perp);
-    pmCartScalMultEq(&d_perp, dr);
-    //TODO error checks
-    pmCartCartAdd(&d_perp, &r_tan, tan);
+    Vector6 dp0, dp1;
+
+    // Ugly sequence to build up tangent vector from components of the derivative
+    VecScalMult(&arc->rStart, k * k0, &dp0);
+    VecScalMult(&arc->rEnd, k * k1, &dp1);
+
+    // Merge both components into dp1 (reuses dp1)
+    VecVecAddEq(&dp1, &dp0);
+
+    // tangential vector complete, now normalize
+    VecToCart(&dp1, tan, NULL);
+
+    // Get unit vector after UVW components are stripped away
     pmCartUnitEq(tan);
-
     return TP_ERR_OK;
 }

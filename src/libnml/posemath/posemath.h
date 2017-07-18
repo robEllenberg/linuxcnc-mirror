@@ -715,7 +715,7 @@ extern "C" {
 // FIXME setting this to be an order of magnitude smaller than canon's shortest
 // allowed segment. This is still larger than TP's smallest position, so it may
 // be silently causing trouble.
-#define CART_FUZZ (1.0e-8)
+#define CART_FUZZ (1.0e-7)
 /* how close a cartesian vector's magnitude must be for it to be considered
    a zero vector */
 
@@ -854,6 +854,7 @@ extern "C" {
     extern int pmCartCartDiv(PmCartesian const * const, PmCartesian const * const, PmCartesian * const);
     extern int pmCartMag(PmCartesian const * const, double * const);
     extern int pmCartMagSq(PmCartesian const * const, double * const);
+    extern int pmCartSup(PmCartesian const * const, double * const);
     extern int pmCartCartDisp(PmCartesian const * const v1, PmCartesian const * const v2, double *d);
     extern int pmCartCartAdd(PmCartesian const * const, PmCartesian const * const, PmCartesian * const);
     extern int pmCartCartSub(PmCartesian const * const, PmCartesian const * const, PmCartesian * const);

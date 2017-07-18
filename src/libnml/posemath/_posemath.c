@@ -840,6 +840,23 @@ int pmCartMagSq(PmCartesian const * const v, double *d)
     return pmErrno = 0;
 }
 
+
+/** Supremum of a cartesian vector */
+int pmCartSup(PmCartesian const * const v, double *d)
+{
+    PmCartesian v_abs;
+    pmCartAbs(v, &v_abs);
+
+    double n_max = 0.0;
+    //FIXME replace with fmax
+    n_max = (v_abs.x > v_abs.y) ? v_abs.x : v_abs.y;
+    n_max = (n_max > v_abs.z) ? n_max : v_abs.z;
+
+    *d = n_max;
+
+    return pmErrno = 0;
+}
+
 int pmCartCartDisp(PmCartesian const * const v1, PmCartesian const * const v2,
         double *d)
 {
@@ -1654,21 +1671,27 @@ int pmCartLineInit(PmCartLine * const line, PmCartesian const * const start, PmC
 
     line->start = *start;
     line->end = *end;
+    // Start with the overall displacement from start to end
     r1 = pmCartCartSub(end, start, &line->uVec);
     if (r1) {
         return r1;
     }
+    // Trick: use the difference BEFORE we normalize the unit vector to compute
+    // the supremum
+    double supremum;
+    pmCartSup(&line->uVec, &supremum);
 
+    // Only try to find the unit vector if it's long enough
     pmCartMag(&line->uVec, &tmag);
-    if (IS_FUZZ(tmag, CART_FUZZ)) {
-        line->uVec.x = 1.0;
+    if (IS_FUZZ(supremum, CART_FUZZ)) {
+        line->uVec.x = 0.0;
         line->uVec.y = 0.0;
         line->uVec.z = 0.0;
     } else {
         r2 = pmCartUnit(&line->uVec, &line->uVec);
     }
     line->tmag = tmag;
-    line->tmag_zero = (line->tmag <= CART_FUZZ);
+    line->tmag_zero = IS_FUZZ(supremum, CART_FUZZ);
 
     /* return PM_NORM_ERR if uVec has been set to 1, 0, 0 */
     return pmErrno = (r1 || r2) ? PM_NORM_ERR : 0;
