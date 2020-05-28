@@ -591,8 +591,8 @@ int Interp::convert_arc2(int move,       //!< either G_2 (cw arc) or G_3 (ccw ar
                        offset1, offset2, block->p_flag? round_to_int(block->p_number) : 1,
                        &center1, &center2, &turn, radius_tolerance, spiral_abs_tolerance, SPIRAL_RELATIVE_TOLERANCE));
   }
-  inverse_time_rate_arc(*current1, *current2, *current3, center1, center2,
-                        turn, end1, end2, end3, block, settings);
+  CHP(inverse_time_rate_arc(*current1, *current2, *current3, center1, center2,
+                            turn, end1, end2, end3, block, settings));
 
   ARC_FEED(block->line_number, end1, end2, center1, center2, turn, end3,
            AA_end, BB_end, CC_end, u, v, w);
@@ -678,8 +678,8 @@ int Interp::convert_arc_comp1(int move,  //!< either G_2 (cw arc) or G_3 (ccw ar
                               &center_x, &center_y, &turn, radius_tolerance, spiral_abs_tolerance, SPIRAL_RELATIVE_TOLERANCE));
     }
 
-    inverse_time_rate_arc(cx, cy, cz, center_x, center_y,
-                          turn, end_x, end_y, end_z, block, settings);
+    CHP(inverse_time_rate_arc(cx, cy, cz, center_x, center_y,
+                              turn, end_x, end_y, end_z, block, settings));
 
 
     // the tool will end up in gamma direction from the programmed arc endpoint
@@ -836,8 +836,8 @@ int Interp::convert_arc_comp2(int move,  //!< either G_2 (cw arc) or G_3 (ccw ar
                          &centerx, &centery, &turn, radius_tolerance, spiral_abs_tolerance, SPIRAL_RELATIVE_TOLERANCE));
     }
 
-    inverse_time_rate_arc(opx, opy, opz, centerx, centery,
-                          turn, end_x, end_y, end_z, block, settings);
+    CHP(inverse_time_rate_arc(opx, opy, opz, centerx, centery,
+                              turn, end_x, end_y, end_z, block, settings));
 
     side = settings->cutter_comp_side;
     tool_radius = settings->cutter_comp_radius;   /* always is positive */
@@ -4487,10 +4487,10 @@ int Interp::convert_straight(int move,   //!< either G_0 or G_1
                 &AA_end, &BB_end, &CC_end, &u_end, &v_end, &w_end));
 
   if (move == G_1) {
-      inverse_time_rate_straight(end_x, end_y, end_z,
+      CHP(inverse_time_rate_straight(end_x, end_y, end_z,
                                  AA_end, BB_end, CC_end,
                                  u_end, v_end, w_end,
-                                 block, settings);
+                                     block, settings));
   }
 
   if ((settings->cutter_comp_side) &&    /* ! "== true" */

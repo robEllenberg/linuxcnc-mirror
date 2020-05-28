@@ -27,6 +27,17 @@
 
 /****************************************************************************/
 
+// KLUDGE zero or very nearly zero feed rates are likely an error due to bad CAM,
+// but small feed rates on the order of 1e-7 are possible with linear / rotary combination moves.
+// A cutoff of 1e-10 is a guess of lowest reasonable feed rate, based on the following pathological case:
+// dX = 0.0000001
+// Z = 1
+// dA = 3600 (10 revolutions)
+// F = 0.001 (1000 minutes)
+//
+// Corresponds to a 3.6 deg/min (.062 IPM at the surface of a 2" diameter cylinder) move that takes 1000 minutes
+// to complete, with an impossibly small motion in X.
+static constexpr const double MIN_INV_TIME_FEEDRATE = 1e-10;
 /*! inverse_time_rate_arc
 
 Returned Value: int (INTERP_OK)
@@ -56,13 +67,15 @@ int Interp::inverse_time_rate_arc(double x1,     //!< x coord of start point of 
                                  block_pointer block,   //!< pointer to a block of RS274 instructions
                                  setup_pointer settings)        //!< pointer to machine settings             
 {
-  double length;
-  double rate;
 
-  if (settings->feed_mode != INVERSE_TIME) return -1;
+  if (settings->feed_mode != INVERSE_TIME) {
+      // Skip inverse time processing
+      return INTERP_OK;
+  }
 
-  length = find_arc_length(x1, y1, z1, cx, cy, turn, x2, y2, z2);
-  rate = std::max(0.0, (length * block->f_number));
+  double length = find_arc_length(x1, y1, z1, cx, cy, turn, x2, y2, z2);
+  double rate = length * block->f_number;
+  CHKS(rate <= MIN_INV_TIME_FEEDRATE, _("G93 effective feed rate %g is too small."), rate);
   enqueue_SET_FEED_RATE(rate);
   settings->feed_rate = rate;
 
@@ -97,11 +110,12 @@ int Interp::inverse_time_rate_straight(double end_x,     //!< x coordinate of en
                                        block_pointer block,      //!< pointer to a block of RS274 instructions  
                                        setup_pointer settings)   //!< pointer to machine settings               
 {
-  double length;
-  double rate;
-  double cx, cy, cz;
+  if (settings->feed_mode != INVERSE_TIME) {
+      // skip inverse time processing
+      return INTERP_OK;
+  }
 
-  if (settings->feed_mode != INVERSE_TIME) return -1;
+  double cx, cy, cz;
 
   if (settings->cutter_comp_side && settings->cutter_comp_radius > 0.0 &&
       !settings->cutter_comp_firstmove) {
@@ -114,14 +128,17 @@ int Interp::inverse_time_rate_straight(double end_x,     //!< x coordinate of en
       cz = settings->current_z;
   }
 
-  length = find_straight_length(end_x, end_y, end_z,
+  double length = find_straight_length(end_x, end_y, end_z,
                                 AA_end, BB_end, CC_end,
                                 u_end, v_end, w_end,
                                 cx, cy, cz,
                                 settings->AA_current, settings->BB_current, settings->CC_current,
                                 settings->u_current, settings->v_current, settings->w_current);
 
-  rate = std::max(0.0, (length * block->f_number));
+  double rate = length * block->f_number;
+  if (rate <= MIN_INV_TIME_FEEDRATE) {
+      ERS(_("G93 effective feed rate %g is too small."), rate);
+  }
   enqueue_SET_FEED_RATE(rate);
   settings->feed_rate = rate;
 
